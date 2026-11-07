@@ -1,6 +1,6 @@
 ---
 ---
-<form id="add-bookmark">
+<form id="add-bookmark" novalidate>
   <div class="field">
     <label for="url">Link to save</label>
     <input
@@ -10,14 +10,14 @@
       inputmode="url"
       autocomplete="off"
       spellcheck="false"
-      placeholder="https://example.com"
+      placeholder="example.com or https://example.com"
       required
     />
   </div>
   <button type="submit">Add bookmark</button>
 </form>
 
-<p class="hint">Paste a URL and select <strong>Add bookmark</strong> to generate its short <code>mona-</code> slug.</p>
+<p class="hint">Add a link with or without <code>https://</code> to create its short <code>mona-</code> slug.</p>
 
 <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
 
@@ -33,14 +33,17 @@
 </ul>
 
 <script>
+  import { formatBookmark, loadBookmarks, normalizeUrl } from '../lib/bookmarks.mjs';
+
   type Bookmark = {
     url: string;
     slug: string;
   };
 
-  const storageKey = 'mona-bookmarks-v1';
+  const storageKey = 'mona-bookmarks';
+  const legacyStorageKey = 'mona-bookmarks-v1';
   const alphabet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const slugLength = 6;
+  const slugLength = 4;
   const form = document.querySelector<HTMLFormElement>('#add-bookmark');
   const urlInput = document.querySelector<HTMLInputElement>('#url');
   const list = document.querySelector<HTMLUListElement>('#bookmark-list');
@@ -55,28 +58,6 @@
 
   let bookmarks: Bookmark[] = [];
   let storageReady = false;
-
-  function isHttpUrl(value: string): boolean {
-    try {
-      const url = new URL(value);
-      return (url.protocol === 'http:' || url.protocol === 'https:') && url.hostname.length > 0;
-    } catch {
-      return false;
-    }
-  }
-
-  function isBookmark(value: unknown): value is Bookmark {
-    if (typeof value !== 'object' || value === null || !('url' in value) || !('slug' in value)) {
-      return false;
-    }
-
-    return (
-      typeof value.url === 'string' &&
-      isHttpUrl(value.url) &&
-      typeof value.slug === 'string' &&
-      /^mona-[0-9a-zA-Z]{6}$/.test(value.slug)
-    );
-  }
 
   function setStatus(message: string, isError = false) {
     status.textContent = message;
@@ -115,16 +96,26 @@
       const item = document.createElement('li');
       item.className = 'bookmark';
 
+      const label = document.createElement('span');
+      label.className = 'bookmark-label';
+
+      const formatted = formatBookmark(bookmark);
+      const separator = ' :: ';
+      const separatorIndex = formatted.lastIndexOf(separator);
       const link = document.createElement('a');
       link.className = 'url';
       link.href = bookmark.url;
       link.target = '_blank';
       link.rel = 'noopener noreferrer';
-      link.textContent = bookmark.url;
+      link.textContent = formatted.slice(0, separatorIndex);
+
+      const divider = document.createElement('span');
+      divider.className = 'separator';
+      divider.textContent = formatted.slice(separatorIndex, separatorIndex + separator.length);
 
       const slug = document.createElement('span');
       slug.className = 'slug';
-      slug.textContent = bookmark.slug;
+      slug.textContent = formatted.slice(separatorIndex + separator.length);
 
       const copyButton = document.createElement('button');
       copyButton.className = 'copy';
@@ -140,7 +131,8 @@
         }
       });
 
-      item.append(link, slug, copyButton);
+      label.append(link, divider, slug);
+      item.append(label, copyButton);
       list.append(item);
     }
 
@@ -157,9 +149,9 @@
       return;
     }
 
-    const url = urlInput.value.trim();
-    if (!isHttpUrl(url)) {
-      setStatus('Enter a valid absolute HTTP or HTTPS URL.', true);
+    const url = normalizeUrl(urlInput.value);
+    if (!url) {
+      setStatus('Enter a valid web address, such as example.com or https://example.com.', true);
       urlInput.focus();
       return;
     }
@@ -206,17 +198,18 @@
 
   try {
     const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      const parsed: unknown = JSON.parse(stored);
-      if (!Array.isArray(parsed) || !parsed.every(isBookmark)) {
-        throw new Error('Saved bookmarks data is invalid.');
-      }
-      bookmarks = parsed;
+    const legacyStored = stored === null ? localStorage.getItem(legacyStorageKey) : null;
+    const source = stored ?? legacyStored;
+    bookmarks = loadBookmarks(source);
+
+    const cleaned = JSON.stringify(bookmarks);
+    if ((stored === null && legacyStored !== null) || (stored !== null && stored !== cleaned)) {
+      localStorage.setItem(storageKey, cleaned);
     }
     storageReady = true;
     renderBookmarks();
   } catch {
-    emptyState.hidden = true;
-    setStatus('Could not load saved bookmarks. Browser storage may be unavailable or contain invalid data.', true);
+    renderBookmarks();
+    setStatus('Could not access browser storage. Bookmarks will be available when storage is enabled.', true);
   }
 </script>
